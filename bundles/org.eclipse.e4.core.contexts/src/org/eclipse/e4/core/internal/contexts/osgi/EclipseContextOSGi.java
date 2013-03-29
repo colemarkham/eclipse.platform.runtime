@@ -40,8 +40,17 @@ public class EclipseContextOSGi extends EclipseContext implements ServiceListene
 			if (existing != null) {
 				for (int i = 0; i < existing.length; i++) {
 					String name = (String) existing[i].getProperty(IContextFunction.SERVICE_CONTEXT_KEY);
-					refs.put(name, existing[i]);
-					localValues.put(name, bundleContext.getService(existing[i]));
+					ServiceReference<?> oldRef = refs.get(name);
+					if (oldRef != null) {
+						if (oldRef.compareTo(existing[i]) < 0) {
+							bundleContext.ungetService(oldRef);
+							refs.put(name, existing[i]);
+							localValues.put(name, bundleContext.getService(existing[i]));
+						}
+					} else {
+						refs.put(name, existing[i]);
+						localValues.put(name, bundleContext.getService(existing[i]));
+					}
 				}
 			}
 		} catch (InvalidSyntaxException e) {
@@ -106,18 +115,32 @@ public class EclipseContextOSGi extends EclipseContext implements ServiceListene
 		if (IContextFunction.SERVICE_NAME.equals(name)) // those keep associated names
 			name = (String) ref.getProperty(IContextFunction.SERVICE_CONTEXT_KEY);
 
+		boolean installNew = true;
 		if (refs.containsKey(name)) {
 			ServiceReference<?> oldRef = refs.get(name);
-			if (oldRef != null)
-				bundleContext.ungetService(oldRef);
-			if (event.getType() == ServiceEvent.UNREGISTERING) {
-				refs.put(name, null);
-				remove(name);
-			} else {
-				Object service = bundleContext.getService(ref);
-				refs.put(name, ref);
-				set(name, service);
+			if (oldRef != null) {
+				if (oldRef.equals(ref)) {
+					bundleContext.ungetService(ref);
+					if (event.getType() == ServiceEvent.UNREGISTERING) {
+						// FIXME this should check to see if there are any existing services
+						//   which could replace the one going away 
+					}
+				} else if (oldRef.compareTo(ref) < 0) {
+					bundleContext.ungetService(oldRef);
+				} else {
+					// This new service has a lower priority than the old one
+					installNew = false;
+				}
 			}
+			if (event.getType() == ServiceEvent.UNREGISTERING) {
+				refs.remove(name);
+				remove(name);
+			}
+		}
+		if (installNew && event.getType() != ServiceEvent.UNREGISTERING) {
+			Object service = bundleContext.getService(ref);
+			refs.put(name, ref);
+			set(name, service);
 		}
 	}
 
